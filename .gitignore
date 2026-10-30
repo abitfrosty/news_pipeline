@@ -1,0 +1,6 @@
+venv/ 
+data/ 
+.env 
+llm_state.txt
+News API & MCP Server · CLSTR
+not_working/
