@@ -7,6 +7,7 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from random import random
+import re
 
 # Initialize the environment wrapper before setting global variables
 load_dotenv()
@@ -24,6 +25,8 @@ def init_database():
     with open(DB_SCHEMA_PATH, "r") as f:
         schema = f.read()
     conn = sqlite3.connect(DB_NAME)
+    conn.execute("PRAGMA synchronous = NORMAL;")
+    conn.execute("PRAGMA journal_mode = WAL;")
     conn.executescript(schema)
     conn.close()
     
@@ -56,6 +59,20 @@ def init_database():
     conn.close()
     """
 
+def clean_clstr_payload(raw_text: str) -> str:
+    if not raw_text:
+        return ""
+    
+    # 1. Remove metadata header up to the last update timestamp
+    # Matches '[SITUATION]' through to the end of the line containing 'Last updated...'
+    clean_text = re.sub(r'^\[SITUATION\].*?Last updated[^\n]+\n?', '', raw_text, flags=re.DOTALL)
+    
+    # 2. Strip trailing domain tracking signatures and update counts
+    # Looks for the characteristic sequence of multiple domain extensions separated by middle dots
+    clean_text = re.sub(r'\b\w+\.[a-z]{2,3}(?:\s+·\s+\w+\.[a-z]{2,3})*.*This summary has been updated.*$', '', clean_text, flags=re.DOTALL)
+    
+    return clean_text.strip()
+
 def scrape_full_text(url):
     """Tier 2: Connects directly to the source link to extract unredacted text for free."""
     if not url:
@@ -70,6 +87,7 @@ def scrape_full_text(url):
             # Smart extraction: Grabs text inside paragraph tags, excluding ads
             paragraphs = soup.find_all('p')
             full_article = " ".join([p.get_text().strip() for p in paragraphs if len(p.get_text()) > 30])
+            full_article = clean_clstr_payload(full_article)
             return full_article if len(full_article) > SUMMARY_THRESHOLD else None
     except Exception as e:
         print(f"[Scraper Skip] Failed to extract text from {url}: {e}")
@@ -111,7 +129,7 @@ def save_situation_to_sql(cursor, situation):
         situation.get("significance_score"),
         situation.get("first_seen"),
         situation.get("last_updated"),
-        situation.get("ingested_at"),
+        datetime.isoformat(datetime.now()),
         url
     ))
 
@@ -131,6 +149,8 @@ def execute_pipeline_cycle():
     current_cursor = None
     total_processed = 0
     conn = sqlite3.connect(DB_NAME)
+    conn.execute("PRAGMA synchronous = NORMAL;")
+    conn.execute("PRAGMA journal_mode = WAL;")
     db_cursor = conn.cursor()
     
     while True:
