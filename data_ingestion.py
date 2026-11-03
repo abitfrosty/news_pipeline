@@ -7,6 +7,7 @@ import time
 import datetime
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+from helper import get_current_timestamp
 
 # Initialize the environment wrapper before setting global variables
 load_dotenv()
@@ -81,7 +82,7 @@ class NewsIngestionPipeline:
             situation.get("significance_score"),
             situation.get("first_seen"),
             situation.get("last_updated"),
-            self.get_current_timestamp(),
+            get_current_timestamp(),
             situation.get("url")
         ))
 
@@ -94,7 +95,7 @@ class NewsIngestionPipeline:
         if not cleaned_text:
             print(f"[Info] No valid text to save for situation ID {situation_id}. Skipping database update.")
             return
-        current_time = self.get_current_timestamp()
+        current_time = get_current_timestamp()
 
         conn = self._get_connection()
         cursor = conn.cursor()
@@ -112,10 +113,6 @@ class NewsIngestionPipeline:
             print(f"[-] Database transaction failure on ID {situation_id}: {e}")
         finally:
             conn.close()
-
-    def get_current_timestamp(self):
-        """Returns the current UTC timestamp in %Y-%m-%d %H:%M:%S format."""
-        return datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
     def update_clstr_request_url(self, params, endpoint):
         """Constructs the request URL with query parameters for clstr.news API."""
@@ -161,7 +158,7 @@ class NewsIngestionPipeline:
         return step3.strip()
 
     def execute_ingestion_cycle(self):
-        print(f"[{self.get_current_timestamp()}] Ingestion Cycle Started.")
+        print(f"[{get_current_timestamp()}] Ingestion Cycle Started.")
         headers = {"Authorization": f"Bearer {CLSTR_API_KEY}", "Content-Type": "application/json"}
         params = {"days": 7, "limit": 20, "sort": "recent"}
         endpoint = "situations"
@@ -198,20 +195,20 @@ class NewsIngestionPipeline:
                 if not current_cursor:
                     break
                     
-                time.sleep(1)
+                time.sleep(2)
             except Exception as error:
                 print(f"[Error] Pipeline failure: {error}")
                 break
                 
         conn.close()
-        print(f"[{self.get_current_timestamp()}] Ingestion cycle concluded. Processed records: {total_processed}\n")
+        print(f"[{get_current_timestamp()}] Ingestion cycle concluded. Processed records: {total_processed}\n")
 
     def execute_scraping_cycle(self):
         """
         Saves cleaned text into the time-series model.
         Captures historical processing metrics to prevent temporal look-ahead leakage.
         """
-        print(f"[{self.get_current_timestamp()}] Scraping cycle started.")
+        print(f"[{get_current_timestamp()}] Scraping cycle started.")
         
         total_processed = 0
         conn = self._get_connection()
@@ -245,7 +242,7 @@ class NewsIngestionPipeline:
                 cleaned_text = self.clean_payload(full_text)
                 
                 if cleaned_text:
-                    scraped_payloads.append((cleaned_text, self.get_current_timestamp(), id))
+                    scraped_payloads.append((cleaned_text, get_current_timestamp(), id))
                 else:
                     print(f"[Info] No valid text extracted for ID {id}. Skipping this record.")
                     
@@ -288,4 +285,4 @@ class NewsIngestionPipeline:
             print(f"[-] General Database error: {e}")
         finally:
             conn.close()
-        print(f"[{self.get_current_timestamp()}] Scraping cycle concluded. Processed records: {total_processed}\n")
+        print(f"[{get_current_timestamp()}] Scraping cycle concluded. Processed records: {total_processed}\n")

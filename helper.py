@@ -1,6 +1,7 @@
 import os
 import re
 import sqlite3
+import datetime
 from dotenv import load_dotenv
 
 from data_ingestion import NewsIngestionPipeline
@@ -8,6 +9,10 @@ from data_ingestion import NewsIngestionPipeline
 load_dotenv()
 
 DB_NAME = os.getenv("DB_NAME")
+
+def get_current_timestamp():
+    """Returns the current UTC timestamp in %Y-%m-%d %H:%M:%S format."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
 def clean_clstr_payload(raw_text: str) -> str:
     if not raw_text:
@@ -45,8 +50,7 @@ def trim_full_text():
         print(f"[-] Database error: {e}")
     finally:
         conn.close()
-    
-
+        
 if __name__ == "__main__":
     print("Starting full text trimming...")
     trim_full_text()
