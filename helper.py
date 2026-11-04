@@ -4,7 +4,7 @@ import sqlite3
 import datetime
 from dotenv import load_dotenv
 
-from data_ingestion import NewsIngestionPipeline
+#from data_ingestion import NewsIngestionPipeline
 
 load_dotenv()
 
@@ -33,6 +33,7 @@ def clean_clstr_payload(raw_text: str) -> str:
 
     return clean_text
 
+"""
 def trim_full_text():
     data_ingestion = NewsIngestionPipeline()
     conn = data_ingestion._get_connection()
@@ -55,3 +56,5 @@ if __name__ == "__main__":
     print("Starting full text trimming...")
     trim_full_text()
     print("Full text trimming completed.")
+
+"""
