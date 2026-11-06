@@ -1,6 +1,7 @@
 import os
 import requests
 import json
+import time
 from dotenv import load_dotenv
 from helper import get_current_timestamp
 
@@ -9,6 +10,13 @@ load_dotenv()
 
 BCS_API_REFRESH_KEY = os.getenv("BCS_API_REFRESH_KEY")
 BCS_API_ACCESS_KEY = os.getenv("BCS_API_ACCESS_KEY")
+
+BCS_API_REFRESH_KEYS = {
+    "Broker": os.getenv("BCS_API_REFRESH_KEY6998"),
+    "IIS1": os.getenv("BCS_API_REFRESH_KEY7352"),
+    "IIS2": os.getenv("BCS_API_REFRESH_KEY9373"),
+    "IIS3": os.getenv("BCS_API_REFRESH_KEY9563")
+}
 
 def get_portfolio_data(access_token):
     # Getting portfolio data
@@ -109,18 +117,18 @@ def save_portfolio_data(portfolio_data, prefix=""):
     print(f"Portfolio successfully saved to {report_filename}")
 
 
-if __name__ == "__main__":
+def portfolio_pipeline(refresh_token, portfolio_name=""):
     # 1. Getting the access token
-    bcs_access_token = get_access_token(BCS_API_REFRESH_KEY)
+    bcs_access_token = get_access_token(refresh_token)
 
     if not bcs_access_token:
-        exit()
+        return
     
     # 2. Requesting Portfolio Data
     portfolio_response = get_portfolio_data(bcs_access_token)
 
     if not portfolio_response:
-        exit()
+        return
 
     # 3. Save portfolio data
     save_portfolio_data(portfolio_response.json())
@@ -129,5 +137,10 @@ if __name__ == "__main__":
     parsed_portfolio = parse_portfolio_data(portfolio_response.json())
 
     # 5. Save clean portfolio data
-    save_portfolio_data(parsed_portfolio, "_parsed")
-      
+    save_portfolio_data(parsed_portfolio, f"_{portfolio_name}_parsed")
+
+
+if __name__ == "__main__":
+    for portfolio, key in BCS_API_REFRESH_KEYS.items():
+        portfolio_pipeline(key, portfolio)
+        time.sleep(1)
