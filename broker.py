@@ -116,6 +116,80 @@ def save_portfolio_data(portfolio_data, prefix=""):
         
     print(f"Portfolio successfully saved to {report_filename}")
 
+def orders_pipeline(refresh_token):
+    # 1. Getting the access token
+    bcs_access_token = get_access_token(refresh_token)
+
+    if not bcs_access_token:
+        print("Failed to obtain access token.")
+        return
+
+    url = "https://be.broker.ru/trade-api-bff-trade-details/api/v1/trades/search"
+    page_size = 100
+    current_offset = 0
+    all_records = []
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": f"Bearer {bcs_access_token}",
+    }
+
+    print("Starting data retrieval across all pages...")
+
+    while True:
+        # Define the payload with dynamic offset pagination
+        payload = json.dumps(
+            {
+                "size": str(page_size),
+                "offset": str(current_offset),
+                "startDateTime": "2026-02-01T00:00:00.000Z",
+                "endDateTime": "2026-11-07T00:00:00.000Z",
+            }
+        )
+
+        response = requests.request("POST", url, headers=headers, data=payload)
+
+        # Handle rate limiting (HTTP 429) gracefully if it occurs
+        if response.status_code == 429:
+            print("Rate limit reached. Sleeping for 5 seconds...")
+            time.sleep(5)
+            continue
+
+        if response.status_code != 200:
+            print(f"Request failed: {response.status_code} - {response.text}")
+            break
+
+        data = response.json()
+        records = data.get("records", [])
+
+        if not records:
+            # Break the loop if no more records are returned
+            break
+
+        all_records.extend(records)
+        print(
+            f"Fetched offset {current_offset}. Cumulative records: {len(all_records)}"
+        )
+
+        # If we have collected all records indicated by the server, we can stop early
+        total_records = data.get("totalRecords", 0)
+        if len(all_records) >= total_records:
+            break
+
+        # Increment offset to fetch the next page
+        current_offset += page_size
+
+        # Small polite delay to keep the server happy and avoid hitting rate limits
+        time.sleep(1)
+
+    # Reconstruct the final JSON object to preserve your original format structure
+    final_payload = {"records": all_records, "totalRecords": len(all_records)}
+
+    # Save the consolidated records
+    save_portfolio_data(final_payload, "_orders")
+    print(f"Pipeline complete. Successfully saved {len(all_records)} total trades.")
+
 
 def portfolio_pipeline(refresh_token, portfolio_name=""):
     # 1. Getting the access token
@@ -141,6 +215,11 @@ def portfolio_pipeline(refresh_token, portfolio_name=""):
 
 
 if __name__ == "__main__":
+
+    orders_pipeline(BCS_API_REFRESH_KEY)
+
+    exit()
+    
     for portfolio, key in BCS_API_REFRESH_KEYS.items():
         portfolio_pipeline(key, portfolio)
         time.sleep(1)
