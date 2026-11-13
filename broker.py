@@ -2,6 +2,7 @@ import os
 import requests
 import json
 import time
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from helper import get_current_timestamp
 
@@ -78,6 +79,7 @@ def get_access_token(refresh_token):
 
     return None
 
+
 def parse_portfolio_data(portfolio_data):
     # Example Usage:
     # parsed_data = load_and_parse_stored_portfolio("portfolio_2026-11-04_12-54-14.json")
@@ -105,6 +107,7 @@ def parse_portfolio_data(portfolio_data):
         
     return unique_portfolio
 
+
 def save_portfolio_data(portfolio_data, prefix=""):
     # 1. Standardize your filename (no colons for Windows)
     safe_timestamp = get_current_timestamp().replace(":", "-").replace(" ", "_")
@@ -116,79 +119,131 @@ def save_portfolio_data(portfolio_data, prefix=""):
         
     print(f"Portfolio successfully saved to {report_filename}")
 
-def orders_pipeline(refresh_token):
-    # 1. Getting the access token
-    bcs_access_token = get_access_token(refresh_token)
 
+def fetch_bcs_trades_chunked(refresh_token, start_str="2026-02-01", end_str="2026-11-13", chunk_days=7):
+    bcs_access_token = get_access_token(refresh_token)
     if not bcs_access_token:
         print("Failed to obtain access token.")
         return
 
     url = "https://be.broker.ru/trade-api-bff-trade-details/api/v1/trades/search"
-    page_size = 100
-    current_offset = 0
-    all_records = []
-
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json",
         "Authorization": f"Bearer {bcs_access_token}",
     }
 
-    print("Starting data retrieval across all pages...")
+    start_dt = datetime.strptime(start_str, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_str, "%Y-%m-%d")
+    
+    all_records = []
+    seen_trade_nums = set()
+    page_size = 100
 
-    while True:
-        # Define the payload with dynamic offset pagination
-        payload = json.dumps(
-            {
-                "size": str(page_size),
-                "offset": str(current_offset),
-                "startDateTime": "2026-02-01T00:00:00.000Z",
-                "endDateTime": "2026-11-07T00:00:00.000Z",
-            }
-        )
+    current_start = start_dt
+    while current_start <= end_dt:
+        current_end = min(current_start + timedelta(days=chunk_days - 1), end_dt)
+        
+        s_iso = current_start.strftime("%Y-%m-%dT00:00:00.000Z")
+        e_iso = current_end.strftime("%Y-%m-%dT23:59:59.000Z")
+        
+        offset = 0
+        while True:
+            payload = json.dumps({
+                "size": page_size,
+                "offset": offset,
+                "startDateTime": s_iso,
+                "endDateTime": e_iso,
+            })
 
-        response = requests.request("POST", url, headers=headers, data=payload)
+            response = requests.post(url, headers=headers, data=payload)
+            if response.status_code == 429:
+                time.sleep(5)
+                continue
+            if response.status_code == 204 or not response.text.strip():
+                # Empty response body means no trades in this window/page
+                break
+            if response.status_code != 200:
+                print(f"Error {response.status_code} for {s_iso[:10]}..{e_iso[:10]}: {response.text}")
+                break
 
-        # Handle rate limiting (HTTP 429) gracefully if it occurs
-        if response.status_code == 429:
-            print("Rate limit reached. Sleeping for 5 seconds...")
-            time.sleep(5)
-            continue
+            try:
+                data = response.json()
+            except ValueError:
+                print(f"Non-JSON response for {s_iso[:10]}..{e_iso[:10]}: {repr(response.text[:200])}")
+                break
 
-        if response.status_code != 200:
-            print(f"Request failed: {response.status_code} - {response.text}")
-            break
+            records = data.get("records", [])
+            if not records:
+                break
 
-        data = response.json()
-        records = data.get("records", [])
+            new_count = 0
+            for rec in records:
+                t_num = rec.get("tradeNum")
+                if t_num not in seen_trade_nums:
+                    seen_trade_nums.add(t_num)
+                    all_records.append(rec)
+                    new_count += 1
 
-        if not records:
-            # Break the loop if no more records are returned
-            break
+            total_records = data.get("totalRecords", 0)
+            if new_count == 0 or len(records) < page_size or (offset + len(records)) >= total_records:
+                break
 
-        all_records.extend(records)
-        print(
-            f"Fetched offset {current_offset}. Cumulative records: {len(all_records)}"
-        )
+            offset += page_size
+            time.sleep(0.5)
 
-        # If we have collected all records indicated by the server, we can stop early
-        total_records = data.get("totalRecords", 0)
-        if len(all_records) >= total_records:
-            break
+        print(f"Window {s_iso[:10]} -> {e_iso[:10]}: total unique trades = {len(all_records)}")
+        current_start = current_end + timedelta(days=1)
+        time.sleep(0.5)
 
-        # Increment offset to fetch the next page
-        current_offset += page_size
-
-        # Small polite delay to keep the server happy and avoid hitting rate limits
-        time.sleep(1)
-
-    # Reconstruct the final JSON object to preserve your original format structure
     final_payload = {"records": all_records, "totalRecords": len(all_records)}
+    save_portfolio_data(final_payload, "_trades")
+    print(f"Done! Saved {len(all_records)} total unique trades.")
+    return final_payload
 
-    # Save the consolidated records
-    save_portfolio_data(final_payload, "_orders")
-    print(f"Pipeline complete. Successfully saved {len(all_records)} total trades.")
+
+def trades_pipeline(refresh_token):
+    # 1. Getting trades
+    parsed_trades = fetch_bcs_trades_chunked(refresh_token, start_str="2026-10-01", end_str="2026-11-13", chunk_days=7)
+
+    # 2. Clean trades
+    cleaned_trades = clean_trade_records(parsed_trades)
+
+    # 3. Save trades
+    save_portfolio_data(cleaned_trades, "_trades_cleaned")
+
+
+def clean_trade_records(raw_data):
+    """
+    Cleans raw BCS trade JSON data, keeping only core fields for trade analysis.
+    Accepts either a file path (str) or a parsed JSON dict/list.
+    """
+    # Example usage:
+    # cleaned_trades = clean_trade_records(final_payload)
+    # Or directly from a saved JSON file:
+    # cleaned_trades = clean_trade_records("path/to/your_trades.json")
+    if isinstance(raw_data, str):
+        with open(raw_data, "r", encoding="utf-8") as f:
+            raw_data = json.load(f)
+
+    records = raw_data.get("records", []) if isinstance(raw_data, dict) else raw_data
+    side_map = {"1": "buy", "2": "sell"}
+    
+    cleaned = []
+    for rec in records:
+        raw_side = str(rec.get("side", ""))
+        cleaned.append({
+            "ticker": rec.get("ticker"),
+            "price": rec.get("price"),
+            "date": rec.get("tradeDateTime"),
+            "quantity": rec.get("tradeQuantity"),
+            "lots": rec.get("tradeQuantityLots"),
+            "side": side_map.get(raw_side, raw_side),
+        })
+
+    # Sort chronologically from oldest to newest
+    cleaned.sort(key=lambda x: x["date"] or "")
+    return cleaned
 
 
 def portfolio_pipeline(refresh_token, portfolio_name=""):
@@ -216,9 +271,9 @@ def portfolio_pipeline(refresh_token, portfolio_name=""):
 
 if __name__ == "__main__":
 
-    orders_pipeline(BCS_API_REFRESH_KEY)
-
     exit()
+        
+    trades_pipeline(BCS_API_REFRESH_KEY)
     
     for portfolio, key in BCS_API_REFRESH_KEYS.items():
         portfolio_pipeline(key, portfolio)
